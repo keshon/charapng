@@ -2,6 +2,7 @@ package charapng
 
 import (
 	"bytes"
+	"compress/gzip"
 	"compress/zlib"
 	"errors"
 	"fmt"
@@ -73,7 +74,7 @@ func parseZTXt(data []byte) (textChunk, error) {
 		return textChunk{}, errors.New("zTXt: missing compression method byte")
 	}
 
-	buf, err := zlibDecompress(rest[1:])
+	buf, err := decompressChunk(rest[1:])
 	if err != nil {
 		return textChunk{}, fmt.Errorf("zTXt: decompress: %w", err)
 	}
@@ -120,7 +121,7 @@ func parseITXt(data []byte) (textChunk, error) {
 	}
 
 	if compressed {
-		buf, err := zlibDecompress(rest)
+		buf, err := decompressChunk(rest)
 		if err != nil {
 			return textChunk{}, fmt.Errorf("iTXt: decompress: %w", err)
 		}
@@ -140,8 +141,27 @@ func splitNull(b []byte) (keyword string, rest []byte, ok bool) {
 	return string(b[:i]), b[i+1:], true
 }
 
+// decompressChunk tries zlib first (PNG standard), then gzip (used by some generators).
+func decompressChunk(data []byte) ([]byte, error) {
+	buf, err := zlibDecompress(data)
+	if err == nil {
+		return buf, nil
+	}
+	return gzipDecompress(data)
+}
+
 func zlibDecompress(data []byte) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+
+	return io.ReadAll(r)
+}
+
+func gzipDecompress(data []byte) ([]byte, error) {
+	r, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}

@@ -2,6 +2,7 @@ package charapng
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,7 +22,7 @@ var keywords = map[string]struct{}{
 
 // DecodeFile opens the file at path and extracts the character card embedded inside it.
 // It is a convenience wrapper around Decode.
-func DecodeFile(path string) (*Card, error) {
+func DecodeFile(path string) (*RawCard, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("charapng: open file: %w", err)
@@ -33,7 +34,7 @@ func DecodeFile(path string) (*Card, error) {
 
 // Decode reads a PNG from r and returns the first character card payload it finds.
 // Returns ErrCardNotFound if no recognised payload exists.
-func Decode(r io.Reader) (*Card, error) {
+func Decode(r io.Reader) (*RawCard, error) {
 	chunks, err := readPNGChunks(r)
 	if err != nil {
 		return nil, fmt.Errorf("charapng: read png: %w", err)
@@ -51,10 +52,14 @@ func Decode(r io.Reader) (*Card, error) {
 
 		data, err := base64.StdEncoding.DecodeString(string(t.Value))
 		if err != nil {
-			return nil, fmt.Errorf("charapng: decode base64 for keyword %q: %w", t.Keyword, err)
+			// Some cards store raw JSON instead of base64
+			if json.Valid(t.Value) && looksLikeCard(t.Value) {
+				return &RawCard{Keyword: t.Keyword, JSON: json.RawMessage(t.Value)}, nil
+			}
+			continue
 		}
 
-		return &Card{
+		return &RawCard{
 			Keyword: t.Keyword,
 			JSON:    data,
 		}, nil
@@ -66,4 +71,15 @@ func Decode(r io.Reader) (*Card, error) {
 func isKeyword(k string) bool {
 	_, ok := keywords[k]
 	return ok
+}
+
+// looksLikeCard returns true if the JSON has character card-like keys (name or spec).
+func looksLikeCard(data []byte) bool {
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return false
+	}
+	_, hasName := m["name"]
+	_, hasSpec := m["spec"]
+	return hasName || hasSpec
 }
